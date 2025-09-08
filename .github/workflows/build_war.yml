@@ -1,0 +1,234 @@
+name: Build and Upload WAR to pCloud by Tag
+
+on:
+  push:
+    tags:
+      - '*-v*.*.*'  # Matches uat-v1.0.0, cug-v1.2.3, prod-v2.0.0
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      env_name: ${{ steps.set_env.outputs.env_name }}
+
+    steps:
+      - name: Extract Environment from Tag
+        id: extract_env
+        run: |
+          TAG_NAME="${GITHUB_REF##*/}"
+          ENV_PREFIX="${TAG_NAME%%-*}"   # e.g., uat from uat-v1.0.0
+          echo "env_prefix=$ENV_PREFIX" >> $GITHUB_OUTPUT
+
+      - name: Set GitHub Environment
+        id: set_env
+        run: |
+          PREFIX=${{ steps.extract_env.outputs.env_prefix }}
+          ENV_NAME=$(echo $PREFIX | tr '[:lower:]' '[:upper:]')  # UAT, CUG, PROD
+          echo "env_name=$ENV_NAME" >> $GITHUB_OUTPUT
+
+      - name: Setup Environment Context
+        run: echo "Selected environment is ${{ steps.set_env.outputs.env_name }}"
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: ${{ needs.build.outputs.env_name }}
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Java 8
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '8'
+
+      - name: Build WAR with Maven
+        run: mvn clean package
+
+      - name: Run Tests
+        run: mvn test
+
+      - name: Upload WAR Artifact to GitHub
+        uses: actions/upload-artifact@v4
+        with:
+          name: war-artifact
+          path: target/*.war
+          retention-days: 3
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: target/*.war
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install rclone
+        run: |
+          curl https://rclone.org/install.sh | sudo bash
+
+      - name: Configure rclone for pCloud
+        run: |
+          mkdir -p ~/.config/rclone
+          echo "[Pcloud]" >> ~/.config/rclone/rclone.conf
+          echo "type = pcloud" >> ~/.config/rclone/rclone.conf
+          echo 'token = ${{ secrets.RCLONE_PCLOUD_TOKEN_JSON }}' >> ~/.config/rclone/rclone.conf
+
+      - name: Upload WAR to pCloud
+        run: |
+          ENV=${{ needs.build.outputs.env_name }}
+          TARGET_DIR="Pcloud:/GitHubWARs/$ENV"
+          rclone mkdir "$TARGET_DIR"
+          rclone copy target/*.war "$TARGET_DIR" --progress
+
+
+
+
+# name: Build and Release WAR
+
+# on:
+#   push:
+#     tags:
+#       - 'uat-v*.*.*'
+#       - 'cug-v*.*.*'
+#       - 'prod-v*.*.*'
+
+# jobs:
+#   extract-env:
+#     runs-on: ubuntu-latest
+#     outputs:
+#       environment: ${{ steps.setenv.outputs.env }}
+#     steps:
+#       - name: Extract Environment
+#         id: setenv
+#         run: |
+#           TAG_NAME="${GITHUB_REF##*/}"
+#           ENVIRONMENT=$(echo "$TAG_NAME" | cut -d'-' -f1 | tr '[:lower:]' '[:upper:]')
+#           echo "TAG_NAME=$TAG_NAME" >> $GITHUB_ENV
+#           echo "ENVIRONMENT_NAME=$ENVIRONMENT" >> $GITHUB_ENV
+#           echo "::set-output name=env::$ENVIRONMENT"
+
+#   build:
+#     runs-on: ubuntu-latest
+#     needs: extract-env
+
+#     steps:
+#       - name: Checkout code
+#         uses: actions/checkout@v4
+
+#       - name: Set up Java
+#         uses: actions/setup-java@v4
+#         with:
+#           distribution: 'temurin'
+#           java-version: '17'
+
+#       - name: Make mvnw executable
+#         run: chmod +x mvnw
+
+#       - name: Build WAR
+#         run: ./mvnw clean package
+
+#       - name: Upload WAR
+#         uses: actions/upload-artifact@v4
+#         with:
+#           name: war-artifact
+#           path: target/*.war
+
+#   create-jira-ticket:
+#     runs-on: ubuntu-latest
+#     needs: [build, extract-env]
+
+#     steps:
+#       - name: Download WAR
+#         uses: actions/download-artifact@v4
+#         with:
+#           name: war-artifact
+
+#       - name: Create Jira Ticket and Upload WAR
+#         env:
+#           JIRA_EMAIL: ${{ vars.JIRA_EMAIL }}
+#           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+#           JIRA_PROJECT: ${{ vars.JIRA_PROJECT }}
+#           ASSIGNEE_ID: ${{ vars.ASSIGNEE_ID }}
+#           TAG_NAME: ${{ github.ref_name }}
+#           ENVIRONMENT_NAME: ${{ needs.extract-env.outputs.environment }}
+#         run: |
+#           echo "Detected Environment: $ENVIRONMENT_NAME"
+#           WAR_FILE=$(find . -name "*.war" | head -n 1)
+
+#           echo "Creating Jira payload..."
+#           cat <<EOF > payload.json
+#           {
+#             "fields": {
+#               "project": { "key": "${JIRA_PROJECT}" },
+#               "summary": "WAR build and release successful - ${TAG_NAME}",
+#               "description": {
+#                 "type": "doc",
+#                 "version": 1,
+#                 "content": [
+#                   {
+#                     "type": "paragraph",
+#                     "content": [
+#                       {
+#                         "type": "text",
+#                         "text": "Automated build and GitHub release completed for tag ${TAG_NAME} in ${ENVIRONMENT_NAME} environment."
+#                       }
+#                     ]
+#                   }
+#                 ]
+#               },
+#               "issuetype": { "name": "Task" },
+#               "assignee": { "name": "${ASSIGNEE_ID}" }
+#             }
+#           }
+#           EOF
+
+#           echo "Payload content:"
+#           cat payload.json
+
+#           ISSUE_RESPONSE=$(curl -s -X POST \
+#             --url "https://jira.icicibank.com/dashboard/rest/api/latest/issue" \
+#             --user "${JIRA_EMAIL}:${JIRA_API_TOKEN}" \
+#             --header "Content-Type: application/json" \
+#             --data @payload.json)
+
+#           echo "Raw ISSUE_RESPONSE: $ISSUE_RESPONSE"
+
+#           ISSUE_KEY=$(echo "$ISSUE_RESPONSE" | grep -o '"key":"[^"]*"' | cut -d':' -f2 | tr -d '"')
+
+#           if [ -z "$ISSUE_KEY" ]; then
+#             echo "❌ Failed to create Jira issue. Response: $ISSUE_RESPONSE"
+#             exit 1
+#           fi
+
+#           echo "✅ Created Jira issue: $ISSUE_KEY"
+
+#           curl -s -X POST \
+#             --url "https://jira.icicibank.com/dashboard/rest/api/latest/issue/${ISSUE_KEY}/attachments" \
+#             --user "${JIRA_EMAIL}:${JIRA_API_TOKEN}" \
+#             --header "X-Atlassian-Token: no-check" \
+#             --header "Content-Type: multipart/form-data" \
+#             --form "file=@${WAR_FILE}"
+
+#           curl -s -X POST \
+#             --url "https://jira.icicibank.com/dashboard/rest/api/latest/issue/${ISSUE_KEY}/comment" \
+#             --user "${JIRA_EMAIL}:${JIRA_API_TOKEN}" \
+#             --header "Content-Type: application/json" \
+#             --data "{
+#               \"body\": {
+#                 \"type\": \"doc\",
+#                 \"version\": 1,
+#                 \"content\": [
+#                   {
+#                     \"type\": \"paragraph\",
+#                     \"content\": [
+#                       {
+#                         \"type\": \"text\",
+#                         \"text\": \"WAR file uploaded successfully for tag ${TAG_NAME}.\"
+#                       }
+#                     ]
+#                   }
+#                 ]
+#               }
+#             }"
