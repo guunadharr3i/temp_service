@@ -11,12 +11,14 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import java.util.Optional;
 import com.upi_temp_service.temp_service.Entity.UIUPITmpEntity;
+import com.upi_temp_service.temp_service.pojo.ApproveRejectAuditModel;
 import com.upi_temp_service.temp_service.pojo.DataTablePayloadModel;
 import com.upi_temp_service.temp_service.pojo.FilterModel;
 import com.upi_temp_service.temp_service.pojo.IdRequest;
 import com.upi_temp_service.temp_service.pojo.ResponsePojo;
 import com.upi_temp_service.temp_service.pojo.UIUPITempModel;
 import com.upi_temp_service.temp_service.pojo.UpiTempCountRequest;
+import com.upi_temp_service.temp_service.service.ActionAuditService;
 import com.upi_temp_service.temp_service.service.UpiTempService;
 import com.upi_temp_service.temp_service.service.UpiTmpCountService;
 import com.upi_temp_service.temp_service.utils.AuthenticateAPis;
@@ -41,6 +43,9 @@ public class TempController {
     @Autowired
     private UpiTempService tempService;
 
+    @Autowired
+    private ActionAuditService actionAuditService;
+
     @GetMapping()
     public String initialCallApi() {
         return "Hello developer Welcome";
@@ -57,7 +62,7 @@ public class TempController {
         tokenValidation.put("token", token);
         tokenValidation.put("deviceHash", deviceHash);
         logger.info("before accessTokenCalled");
-        String accessToken = authenticateAPis.validateAndRefreshToken(tokenValidation);
+        String accessToken =  authenticateAPis.validateAndRefreshToken(tokenValidation);
         logger.info("after accessTokenCalled");
 
         if (accessToken == null) {
@@ -166,7 +171,20 @@ public class TempController {
 
             if (entity.isPresent()) {
                 logger.info("Returning temp data for ID {}", id);
-                return ResponseEntity.ok(entity.get());
+
+                UIUPITmpEntity e = entity.get();
+
+                UIUPITempModel model = new UIUPITempModel(
+                        e.getId(),
+                        e.getRawJson(),
+                        e.getCreatedBy(),
+                        e.getDateTime(),
+                        e.getStatus(),
+                        e.getActionType(),
+                        e.getTableId(),
+                        e.getRecordId());
+
+                return ResponseEntity.ok(model);
             } else {
                 logger.warn("No temp data found for ID {}", id);
                 return ResponseEntity.status(404).body("No temp data found for ID: " + id);
@@ -190,6 +208,20 @@ public class TempController {
         } catch (Exception ex) {
             logger.error("Unexpected error while deleting ID {}: {}", idRequest.getId(), ex.getMessage(), ex);
             return ResponseEntity.status(500).body("Error deleting entity: " + ex.getMessage());
+        }
+    }
+
+    @PostMapping("/approveRejectAuditSave")
+    public ResponseEntity<String> saveAudit(@RequestBody ApproveRejectAuditModel request) {
+        try {
+            actionAuditService.saveAudit(
+                    request);
+
+            return ResponseEntity.ok("Audit saved successfully");
+        } catch (Exception e) {
+            logger.error("Audit log issue", e.getMessage());
+
+            return ResponseEntity.ok(e.getMessage());
         }
     }
 
