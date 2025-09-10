@@ -19,6 +19,7 @@ import com.upi_temp_service.temp_service.pojo.UIUPITempModel;
 import com.upi_temp_service.temp_service.pojo.UpiTempCountRequest;
 import com.upi_temp_service.temp_service.service.UpiTempService;
 import com.upi_temp_service.temp_service.service.UpiTmpCountService;
+import com.upi_temp_service.temp_service.utils.AuthenticateAPis;
 import com.upi_temp_service.temp_service.utils.ErrorCode;
 import com.upi_temp_service.temp_service.utils.ErrorResponse;
 
@@ -27,6 +28,9 @@ import com.upi_temp_service.temp_service.utils.ErrorResponse;
 @RequestMapping()
 public class TempController {
     private static final Logger logger = LogManager.getLogger(TempController.class);
+
+    @Autowired
+    AuthenticateAPis authenticateAPis;
 
     @Autowired
     UpiTmpCountService upiTmpCountService;
@@ -53,8 +57,7 @@ public class TempController {
         tokenValidation.put("token", token);
         tokenValidation.put("deviceHash", deviceHash);
         logger.info("before accessTokenCalled");
-        String accessToken = token;
-        // authenticateAPis.validateAndRefreshToken(tokenValidation);
+        String accessToken = authenticateAPis.validateAndRefreshToken(tokenValidation);
         logger.info("after accessTokenCalled");
 
         if (accessToken == null) {
